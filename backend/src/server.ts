@@ -27,9 +27,20 @@ app.get("/api/articles",async(_req,res)=>{const articles=(await readDatabase()).
 app.get("/api/articles/:id",async(req,res)=>{const article=await findArticle(String(req.params.id));if(!article)return res.status(404).json({message:"خبر پیدا نشد."});res.json({article});});
 app.get("/api/sources",async(_req,res)=>{const articles=(await readDatabase()).articles;const sources=articles.flatMap((article)=>article.sources.map((source)=>({...source,articleId:article.id,headline:article.headline}))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));res.json({sources});});
 app.post("/api/generate",async(req,res)=>{
-  const parsed=generationSchema.safeParse(req.body); if(!parsed.success)return res.status(400).json({message:"موضوع، منابع و تنظیمات خبر را کامل کنید."});
+  const parsed=generationSchema.safeParse(req.body); if(!parsed.success)return res.status(400).json({message:generationValidationMessage(parsed.error.issues)});
   try{const article=await generateNews(parsed.data);res.status(201).json({article:publicArticle(article),sources:article.sources});}
   catch(error){console.error(error);res.status(500).json({message:error instanceof Error?error.message:"تولید خبر ناموفق بود."});}
+});
+app.post("/api/generate/stream",async(req,res)=>{
+  const parsed=generationSchema.safeParse(req.body);
+  if(!parsed.success)return res.status(400).json({message:generationValidationMessage(parsed.error.issues)});
+  res.status(200);res.setHeader("Content-Type","application/x-ndjson; charset=utf-8");res.setHeader("Cache-Control","no-cache, no-transform");res.setHeader("X-Accel-Buffering","no");res.flushHeaders();
+  const send=(event:unknown)=>{if(!res.writableEnded)res.write(`${JSON.stringify(event)}\n`);};
+  try{
+    const article=await generateNews(parsed.data,(event)=>send({type:"progress",...event}));
+    send({type:"complete",article:publicArticle(article),sources:article.sources});
+  }catch(error){console.error(error);send({type:"error",message:error instanceof Error?error.message:"تولید خبر ناموفق بود."});}
+  res.end();
 });
 app.post("/api/articles",async(req,res)=>{
   const parsed=saveSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({message:"اطلاعات خبر معتبر نیست."});
@@ -42,3 +53,17 @@ app.use((error:unknown,_req:express.Request,res:express.Response,_next:express.N
 app.listen(port,()=>console.log(`Sardabir local API: http://localhost:${port}`));
 
 function publicArticle(article:NewsArticle){return {id:article.id,subject:article.subject,headline:article.headline,lead:article.lead,body:article.body,mediaBias:article.settings.mediaBias,biasIntensity:article.settings.biasIntensity,criticalIntensity:article.settings.criticalIntensity,excitement:article.settings.excitement,humorIntensity:article.settings.humorIntensity??0,outputLength:article.settings.outputLength,audience:article.settings.audience,platform:article.settings.platform,status:article.status,updatedAt:new Date(article.updatedAt).getTime(),createdAt:article.createdAt,versions:article.versions.length,generationUsage:article.generationUsage};}
+
+function generationValidationMessage(issues:Array<{path:PropertyKey[];code:string}>){
+  const labels=new Set(issues.map((issue)=>{
+    const field=String(issue.path[0]||"");
+    if(field==="subject")return "موضوع خبر (حداقل ۳ نویسه)";
+    if(field==="sources")return typeof issue.path[1]==="number"?`منبع شماره ${Number(issue.path[1])+1}`:"حداقل یک منبع معتبر";
+    if(field==="mediaBias"||field==="mediaBiasId")return "گرایش رسانه‌ای";
+    if(field==="outputLength")return "حجم خروجی";
+    if(field==="audience")return "مخاطب";
+    if(field==="platform")return "بستر انتشار";
+    return "تنظیمات خبر";
+  }));
+  return `این موارد را بررسی کنید: ${[...labels].join("، ")}.`;
+}

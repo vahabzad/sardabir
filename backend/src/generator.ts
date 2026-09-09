@@ -24,6 +24,8 @@ const MODEL_USAGE_RATES:Record<string,{input:number;cachedInput:number;output:nu
   "gpt-5.6-luna":{input:.2,cachedInput:.02,output:1.2,credits:{input:5,cachedInput:.5,output:30},fiveHour:{min:.05,max:.4}},
 };
 
+export type GenerationProgress = {level:"info"|"success"|"warning";message:string};
+
 export async function getLocalCodexStatus(){
   const executable=await resolveCodexExecutable();
   if(!executable) return {ready:false,message:"Codex محلی روی سیستم پیدا نشد."};
@@ -37,12 +39,32 @@ export async function getLocalCodexStatus(){
   }
 }
 
-export async function generateNews(input:{ articleId?:string; subject:string; sources:Array<{kind:"url"|"text";value:string}> } & NewsSettings){
+export async function generateNews(input:{ articleId?:string; subject:string; sources:Array<{kind:"url"|"text";value:string}> } & NewsSettings,onProgress?:(event:GenerationProgress)=>void){
+  const progress=(level:GenerationProgress["level"],message:string)=>onProgress?.({level,message});
+  progress("info","بررسی اتصال Codex…");
   const login=await getLocalCodexStatus();
   if(!login.ready) throw new Error("Codex محلی وارد حساب ChatGPT نیست. دستور npm run codex:login را اجرا کنید.");
+  progress("success","اتصال Codex آماده است.");
   const existing=input.articleId?await findArticle(input.articleId):undefined;
   const articleId=existing?.id||nanoid(12);
-  const resolvedSources=await Promise.all(input.sources.map(resolveSource));
+  progress("info",`بررسی ${input.sources.length} منبع آغاز شد.`);
+  const sourceResults=await Promise.all(input.sources.map(async(source,index)=>{
+    const label=sourceLabel(source,index);
+    progress("info",`در حال خواندن ${label}…`);
+    try{
+      const resolved=await resolveSource(source);
+      progress("success",`${label} با موفقیت خوانده شد.`);
+      return {ok:true as const,source:resolved};
+    }catch(error){
+      const message=error instanceof Error?error.message:"منبع قابل خواندن نبود.";
+      progress("warning",`${label} استفاده نشد: ${message}`);
+      return {ok:false as const,label,message};
+    }
+  }));
+  const resolvedSources=sourceResults.filter((result):result is Extract<(typeof sourceResults)[number],{ok:true}>=>result.ok).map((result)=>result.source);
+  const failedSources=sourceResults.filter((result):result is Extract<(typeof sourceResults)[number],{ok:false}>=>!result.ok);
+  if(!resolvedSources.length)throw new Error(`هیچ منبع قابل‌استفاده‌ای باقی نماند. ${failedSources.map((item)=>item.label).join("، ")}`);
+  progress(failedSources.length?"warning":"success",failedSources.length?`${resolvedSources.length} منبع قابل استفاده است و ${failedSources.length} منبع کنار گذاشته شد.`:`هر ${resolvedSources.length} منبع قابل استفاده است.`);
   const template=await readFile(promptFile,"utf8");
   const selectedBias=input.mediaBiasId?await findBias(input.mediaBiasId):undefined;
   const settings:NewsSettings={mediaBias:selectedBias?.name||input.mediaBias,mediaBiasId:selectedBias?.id,mediaBiasPrompt:selectedBias?.prompt||"",biasIntensity:input.biasIntensity,criticalIntensity:input.criticalIntensity,excitement:input.excitement,humorIntensity:input.humorIntensity,outputLength:input.outputLength,audience:input.audience,platform:input.platform};
@@ -52,16 +74,20 @@ export async function generateNews(input:{ articleId?:string; subject:string; so
   const executable=await resolveCodexExecutable(); if(!executable) throw new Error("فایل اجرایی Codex پیدا نشد.");
   const workspace=articleWorkspace(articleId); await mkdir(workspace,{recursive:true});
   const model=await resolveCodexModel();
+  progress("info",`تولید خبر با مدل ${model} آغاز شد…`);
   const codex=new Codex({codexPathOverride:executable,env:localCodexEnvironment(),config:{forced_login_method:"chatgpt",cli_auth_credentials_store:"file"}});
   const threadOptions={workingDirectory:workspace,skipGitRepoCheck:true,sandboxMode:"read-only" as const,approvalPolicy:"never" as const,networkAccessEnabled:false,model};
   const thread=existing?.threadId?codex.resumeThread(existing.threadId,threadOptions):codex.startThread(threadOptions);
   const result=await thread.run(prompt);
+  progress("success","پاسخ Codex دریافت شد؛ در حال پردازش خروجی…");
   const parsed=parseOutput(result.finalResponse);
   const generationUsage=buildGenerationUsage(model,result.usage);
   const now=new Date().toISOString();
   const version={id:nanoid(10),...parsed,settings,...(generationUsage?{generationUsage}:{}),createdAt:now};
   const article:NewsArticle={id:articleId,subject:input.subject,...parsed,settings,sources:resolvedSources,versions:[version,...(existing?.versions||[])],...(generationUsage?{generationUsage}:{}),threadId:thread.id||existing?.threadId,status:"draft",createdAt:existing?.createdAt||now,updatedAt:now};
   await saveArticle(article);
+  progress("success","خبر و آمار مصرف آن در آرشیو ذخیره شد.");
+  if(failedSources.length)progress("warning",`منابع استفاده‌نشده: ${failedSources.map((item)=>item.label).join("، ")}`);
   return article;
 }
 
@@ -104,6 +130,11 @@ function buildGenerationUsage(model:string,usage:{input_tokens:number;cached_inp
   return {model,inputTokens,cachedInputTokens,outputTokens,totalTokens:inputTokens+outputTokens,estimatedApiCostUsd,estimatedCredits,fiveHourEstimatePercent:rates?.fiveHour||null};
 }
 
+function sourceLabel(source:{kind:"url"|"text";value:string},index:number){
+  if(source.kind==="text")return `متن واردشده شماره ${index+1}`;
+  try{return `منبع ${index+1} (${new URL(source.value).hostname})`;}catch{return `منبع ${index+1}`;}
+}
+
 async function resolveSource(source:{kind:"url"|"text";value:string}):Promise<NewsSource>{
   const now=new Date().toISOString();
   if(source.kind==="text") return {id:nanoid(10),kind:"text",title:"متن واردشده",originalText:source.value,extractedText:source.value.trim().slice(0,60_000),createdAt:now};
@@ -137,7 +168,7 @@ async function fetchSourcePage(url:URL){
     }
     await new Promise((resolve)=>setTimeout(resolve,700));
   }
-  throw new Error(`سایت ${url.hostname} پس از دو تلاش، پاسخ ${lastStatus||'نامعتبر'} داد. می‌توانید متن خبر را در زبانه «متن خبر» وارد کنید.`);
+  throw new Error(`سایت ${url.hostname} پاسخ ${lastStatus||'نامعتبر'} داد. می‌توانید متن خبر را مستقیماً وارد کنید.`);
 }
 function decode(value:string){return value.replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&#39;/g,"'").replace(/&quot;/g,'"');}
 function isPrivateHost(host:string){const value=host.toLowerCase();return value==="localhost"||value.endsWith(".local")||value==="::1"||value.startsWith("127.")||value.startsWith("10.")||value.startsWith("192.168.")||/^172\.(1[6-9]|2\d|3[01])\./.test(value);}

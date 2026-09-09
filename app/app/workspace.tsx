@@ -17,6 +17,8 @@ type ArticleDraft = { headline:string; lead:string; body:string };
 type BiasOption = { id:string; name:string; status:'active'|'archived' };
 type GenerationUsage = { model:string; inputTokens:number; cachedInputTokens:number; outputTokens:number; totalTokens:number; estimatedApiCostUsd:number|null; estimatedCredits:number|null; fiveHourEstimatePercent:{min:number;max:number}|null };
 type ArticleDraftWithUsage = ArticleDraft & { generationUsage?:GenerationUsage };
+type GenerationLog = { id:number; level:'info'|'success'|'warning'|'error'; message:string; time:string };
+type StreamEvent = {type:'progress';level:'info'|'success'|'warning';message:string}|{type:'complete';article:{id:string;headline:string;lead:string;body:string;generationUsage?:GenerationUsage}}|{type:'error';message:string};
 
 export function Workspace() {
   const [activeSource,setActiveSource]=useState<'link'|'text'>('link');
@@ -33,11 +35,12 @@ export function Workspace() {
   const [loading,setLoading]=useState(false);
   const [codexStatus,setCodexStatus]=useState<'checking'|'ready'|'offline'>('checking');
   const [notice,setNotice]=useState('');
+  const [generationLogs,setGenerationLogs]=useState<GenerationLog[]>([]);
   const [articleId,setArticleId]=useState<string>();
   const [article,setArticle]=useState<ArticleDraftWithUsage|null>(null);
 
   const settings={mediaBias,mediaBiasId,biasIntensity:values[0],criticalIntensity:values[1],excitement:values[2],humorIntensity:values[3],outputLength,audience,platform};
-  const enteredSources=activeSource==='link'?links.filter(Boolean).map((value)=>({kind:'url' as const,value})):sourceText.trim()?[{kind:'text' as const,value:sourceText}]:[];
+  const enteredSources=activeSource==='link'?links.map((value)=>value.trim()).filter(Boolean).map((value)=>({kind:'url' as const,value})):sourceText.trim()?[{kind:'text' as const,value:sourceText.trim()}]:[];
 
   useEffect(()=>{
     fetch(`${API_BASE}/api/codex/status`)
@@ -71,10 +74,26 @@ export function Workspace() {
   },[]);
 
   async function generateArticle(){
-    if(!subject.trim()){setNotice('ابتدا موضوع خبر را وارد کنید.');return;}
+    if(subject.trim().length<3){setNotice('موضوع خبر باید حداقل ۳ نویسه داشته باشد.');return;}
     if(enteredSources.length===0){setNotice('حداقل یک لینک یا متن منبع وارد کنید.');return;}
-    setNotice('');setLoading(true);
-    try{const response=await fetch(`${API_BASE}/api/generate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({articleId,subject,sources:enteredSources,...settings})});const data=await response.json() as {message?:string;article:{id:string;headline:string;lead:string;body:string;generationUsage?:GenerationUsage}};if(!response.ok)throw new Error(data.message||'تولید خبر ناموفق بود.');setArticle({headline:data.article.headline,lead:data.article.lead,body:data.article.body,generationUsage:data.article.generationUsage});setArticleId(data.article.id);setNotice('خبر تولید و در آرشیو ذخیره شد.');}catch(error){setNotice(error instanceof Error?error.message:'خطایی رخ داد.');}finally{setLoading(false);}
+    setNotice('');setGenerationLogs([]);setLoading(true);
+    const appendLog=(level:GenerationLog['level'],message:string)=>setGenerationLogs((current)=>current[current.length-1]?.level===level&&current[current.length-1]?.message===message?current:[...current,{id:Date.now()+current.length,level,message,time:new Intl.DateTimeFormat('fa-IR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date())}]);
+    try{
+      const response=await fetch(`${API_BASE}/api/generate/stream`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({articleId,subject,sources:enteredSources,...settings})});
+      if(!response.ok){const data=await response.json() as {message?:string};throw new Error(data.message||'تولید خبر ناموفق بود.');}
+      if(!response.body)throw new Error('مرورگر امکان دریافت گزارش زنده را فراهم نکرد.');
+      const reader=response.body.getReader();const decoder=new TextDecoder();let buffer='';let completed=false;let streamError='';
+      const consume=(line:string)=>{
+        if(!line.trim())return;
+        const event=JSON.parse(line) as StreamEvent;
+        if(event.type==='progress')appendLog(event.level,event.message);
+        else if(event.type==='error'){streamError=event.message;appendLog('error',event.message);}
+        else {completed=true;setArticle({headline:event.article.headline,lead:event.article.lead,body:event.article.body,generationUsage:event.article.generationUsage});setArticleId(event.article.id);}
+      };
+      while(true){const {done,value}=await reader.read();buffer+=decoder.decode(value,{stream:!done});const lines=buffer.split('\n');buffer=lines.pop()||'';for(const line of lines)consume(line);if(done){consume(buffer);break;}}
+      if(streamError)throw new Error(streamError);if(!completed)throw new Error('جریان تولید پیش از دریافت نتیجه نهایی قطع شد.');
+      setNotice('خبر تولید و در آرشیو ذخیره شد.');
+    }catch(error){const message=error instanceof Error?error.message:'خطایی رخ داد.';appendLog('error',message);setNotice(message);}finally{setLoading(false);}
   }
   async function saveArticle(){
     if(!article)throw new Error('هنوز خبری برای ذخیره وجود ندارد.');const response=await fetch(`${API_BASE}/api/articles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:articleId,subject,...article,...settings})});const data=await response.json() as {id?:string;message?:string};if(!response.ok)throw new Error(data.message||'ذخیره خبر ناموفق بود.');if(data.id)setArticleId(data.id);setNotice('پیش‌نویس در آرشیو ذخیره شد.');
@@ -94,7 +113,7 @@ export function Workspace() {
           <div className="bias-field-head"><label className="field-label" htmlFor="leaning">گرایش رسانه‌ای</label><Link href="/biases">مدیریت گرایش‌ها</Link></div><select className="select-like" id="leaning" value={mediaBiasId} onChange={(event)=>{const selected=biases.find((bias)=>bias.id===event.target.value);setMediaBiasId(event.target.value);if(selected)setMediaBias(selected.name);}}>{biases.filter((bias)=>bias.status==='active'||bias.id===mediaBiasId).map((bias)=><option key={bias.id} value={bias.id} disabled={bias.status==='archived'}>{bias.name}{bias.status==='archived'?' — بایگانی‌شده':''}</option>)}</select>
           <TooltipProvider delay={250}><div className="control-stack">{controls.map((control,index)=><div className="range-control" key={control.label}><div className="range-meta"><div className="range-label"><label htmlFor={`range-${index}`}>{control.label}</label><Tooltip><TooltipTrigger render={<button type="button" className="help-trigger" aria-label={`راهنمای ${control.label}`}><CircleHelp/></button>}/><TooltipContent side="top" align="start" className="editor-tooltip"><strong>{control.label}</strong><p>{control.help}</p><div className="tooltip-scale"><span>{control.low}</span><i/><span>{control.high}</span></div></TooltipContent></Tooltip></div><span>{values[index]} · {toneFor(index,values[index])}</span></div><input id={`range-${index}`} className="native-range" type="range" min="0" max="100" step="1" value={values[index]} onChange={(event)=>setValues((current)=>current.map((value,i)=>i===index?Number(event.target.value):value))}/></div>)}</div></TooltipProvider>
           <div className="settings-row"><div><label className="settings-label" htmlFor="length">حجم خروجی</label><select id="length" value={outputLength} onChange={(event)=>setOutputLength(event.target.value)}><option>۱۵۰ تا ۲۵۰ کلمه</option><option>۳۰۰ تا ۵۰۰ کلمه</option><option>۵۰۰ تا ۸۰۰ کلمه</option><option>۸۰۰ تا ۱۲۰۰ کلمه</option></select></div><div><label className="settings-label" htmlFor="platform">بستر انتشار</label><select id="platform" value={platform} onChange={(event)=>setPlatform(event.target.value)}><option>وب‌سایت خبری</option><option>روزنامه</option><option>خبرنامه</option><option>تلگرام</option><option>اینستاگرام</option><option>شبکه اجتماعی</option></select></div><div><label className="settings-label" htmlFor="audience">مخاطب</label><select id="audience" value={audience} onChange={(event)=>setAudience(event.target.value)}><option>عموم مردم</option><option>مخاطب تخصصی</option><option>مخاطب سیاسی</option><option>کاربران شبکه‌های اجتماعی</option></select></div></div>
-          <button type="button" className="generate-button" disabled={loading} onClick={generateArticle}><span className="generate-main"><Sparkles/><strong>{loading?'در حال تولید…':article?'تولید نسخه جدید':'تولید خبر'}</strong></span></button>{notice&&<output className="form-notice">{notice}</output>}
+          <button type="button" className="generate-button" disabled={loading} onClick={generateArticle}><span className="generate-main"><Sparkles/><strong>{loading?'در حال تولید…':article?'تولید نسخه جدید':'تولید خبر'}</strong></span></button>{(loading||generationLogs.length>0)&&<GenerationLogPanel logs={generationLogs} loading={loading}/>} {notice&&<output className="form-notice">{notice}</output>}
         </section>
         <section className={`result-panel ${article?'':'is-empty'}`}><div className="result-toolbar"><div><span className="status-dot"/> {article?'پیش‌نویس تولیدشده':'بدون خروجی'}</div>{article&&<div><button aria-label="تولید دوباره" onClick={generateArticle}><RotateCcw/></button><button aria-label="کپی" onClick={()=>navigator.clipboard.writeText(`${article.headline}\n\n${article.lead}\n\n${article.body}`).then(()=>setNotice('خبر کپی شد.'))}><Copy/></button><span className="divider"/><button className="more-button">•••</button></div>}</div>
           {article?<><article className="article-preview"><textarea className="article-title" aria-label="تیتر خبر" value={article.headline} onChange={(event)=>setArticle((current)=>({...current!,headline:event.target.value}))}/><textarea className="lead" aria-label="لید خبر" value={article.lead} onChange={(event)=>setArticle((current)=>({...current!,lead:event.target.value}))}/><div className="article-divider"><span>سردبیر</span></div><textarea className="article-body" aria-label="متن خبر" value={article.body} onChange={(event)=>setArticle((current)=>({...current!,body:event.target.value}))}/></article>{article.generationUsage?<UsageSummary usage={article.generationUsage}/>:<section className="usage-summary usage-summary-empty">آمار مصرف برای نسخه‌های تولیدشده پیش از فعال‌شدن این قابلیت ثبت نشده است.</section>}<footer className="result-footer"><span>{article.body.trim().split(/\s+/).filter(Boolean).length} کلمه</span><span>قابل ویرایش و ذخیره</span></footer></>:<div className="empty-result"><Newspaper/><h2>خروجی خبر اینجا نمایش داده می‌شود</h2><p>موضوع و منبع را وارد کنید، زاویه تحریریه را تنظیم کنید و «تولید خبر» را بزنید.</p></div>}
@@ -102,6 +121,15 @@ export function Workspace() {
       </div>
     </section>
   </main>;
+}
+
+function GenerationLogPanel({logs,loading}:{logs:GenerationLog[];loading:boolean}){
+  const failed=logs.some((log)=>log.level==='error');
+  const status=loading?'در حال اجرا':failed?'تولید ناموفق':'با موفقیت پایان یافت';
+  return <section className="generation-log" aria-label="گزارش زنده تولید خبر" aria-live="polite">
+    <header><div><i className={loading?'is-live':failed?'is-error':'is-done'}/><strong>گزارش زنده تولید</strong></div><span>{status}</span></header>
+    <div className="generation-log-list">{logs.length?logs.map((log)=><div className={`generation-log-row ${log.level}`} key={log.id}><time>{log.time}</time><i/><p>{log.message}</p></div>):<div className="generation-log-wait"><span/>در انتظار اولین رویداد…</div>}</div>
+  </section>;
 }
 
 function UsageSummary({usage}:{usage:GenerationUsage}){
