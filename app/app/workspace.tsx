@@ -11,6 +11,7 @@ const controls = [
   { label:'شدت گرایش رسانه‌ای', value:50, help:'مشخص می‌کند متن تا چه اندازه از گرایش انتخاب‌شده پیروی کند.', low:'۰: نزدیک به بی‌طرف', high:'۱۰۰: کاملاً همسو' },
   { label:'لحن انتقادی', value:50, help:'میزان پرسشگری، نقد و صراحت متن خبر را کنترل می‌کند.', low:'۰: آرام و توصیفی', high:'۱۰۰: تند و چالشی' },
   { label:'جذابیت رسانه‌ای', value:50, help:'روی کشش تیتر، ریتم روایت و انرژی زبان رسانه‌ای اثر می‌گذارد.', low:'۰: رسمی و خشک', high:'۱۰۰: پرکشش و هیجانی' },
+  { label:'لحن جدی یا طنز', value:0, help:'میزان استفاده از طنز، کنایه و شوخ‌طبعی را بدون آسیب به دقت خبر کنترل می‌کند.', low:'۰: کاملاً جدی', high:'۱۰۰: کاملاً طنز' },
 ];
 type ArticleDraft = { headline:string; lead:string; body:string };
 type BiasOption = { id:string; name:string; status:'active'|'archived' };
@@ -33,7 +34,7 @@ export function Workspace() {
   const [articleId,setArticleId]=useState<string>();
   const [article,setArticle]=useState<ArticleDraft|null>(null);
 
-  const settings={mediaBias,mediaBiasId,biasIntensity:values[0],criticalIntensity:values[1],excitement:values[2],outputLength,audience,platform};
+  const settings={mediaBias,mediaBiasId,biasIntensity:values[0],criticalIntensity:values[1],excitement:values[2],humorIntensity:values[3],outputLength,audience,platform};
   const enteredSources=activeSource==='link'?links.filter(Boolean).map((value)=>({kind:'url' as const,value})):sourceText.trim()?[{kind:'text' as const,value:sourceText}]:[];
 
   useEffect(()=>{
@@ -51,18 +52,18 @@ export function Workspace() {
     const context=(document as Document&{modelContext?:{registerTool:(tool:unknown,options:{signal:AbortSignal})=>unknown}}).modelContext;
     if(!context?.registerTool)return;
     const lifecycle=new AbortController();
-    Promise.resolve(context.registerTool({name:'stage_news_brief',title:'آماده‌سازی خبر تازه',description:'موضوع، منبع متنی و شدت‌های تحریریه را در فرم آماده می‌کند.',inputSchema:{type:'object',properties:{subject:{type:'string',minLength:1},sourceText:{type:'string'},biasIntensity:{type:'number',minimum:0,maximum:100},criticalIntensity:{type:'number',minimum:0,maximum:100},excitement:{type:'number',minimum:0,maximum:100}},required:['subject'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},execute(rawInput:unknown){
-      const input=rawInput as {subject?:unknown;sourceText?:unknown;biasIntensity?:unknown;criticalIntensity?:unknown;excitement?:unknown};
+    Promise.resolve(context.registerTool({name:'stage_news_brief',title:'آماده‌سازی خبر تازه',description:'موضوع، منبع متنی و شدت‌های تحریریه را در فرم آماده می‌کند.',inputSchema:{type:'object',properties:{subject:{type:'string',minLength:1},sourceText:{type:'string'},biasIntensity:{type:'number',minimum:0,maximum:100},criticalIntensity:{type:'number',minimum:0,maximum:100},excitement:{type:'number',minimum:0,maximum:100},humorIntensity:{type:'number',minimum:0,maximum:100}},required:['subject'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},execute(rawInput:unknown){
+      const input=rawInput as {subject?:unknown;sourceText?:unknown;biasIntensity?:unknown;criticalIntensity?:unknown;excitement?:unknown;humorIntensity?:unknown};
       if(typeof input.subject!=='string'||!input.subject.trim())throw new Error('موضوع معتبر لازم است.');
-      const next=[input.biasIntensity,input.criticalIntensity,input.excitement].map((value,index)=>typeof value==='number'?Math.max(0,Math.min(100,value)):controls[index].value);
+      const next=[input.biasIntensity,input.criticalIntensity,input.excitement,input.humorIntensity].map((value,index)=>typeof value==='number'?Math.max(0,Math.min(100,value)):controls[index].value);
       setSubject(input.subject.trim());setValues(next);if(typeof input.sourceText==='string'){setActiveSource('text');setSourceText(input.sourceText);}return{staged:true,subject:input.subject.trim(),settings:next};
     }},{signal:lifecycle.signal})).catch(()=>{});return()=>lifecycle.abort();
   },[]);
 
   useEffect(()=>{
     const id=new URLSearchParams(window.location.search).get('article');if(!id)return;
-    fetch(`${API_BASE}/api/articles/${encodeURIComponent(id)}`).then(async(response)=>{if(!response.ok)throw new Error('خبر پیدا نشد.');return await response.json() as {article:{id:string;subject:string;headline:string;lead:string;body:string;settings:{mediaBias:string;mediaBiasId?:string;biasIntensity:number;criticalIntensity:number;excitement:number;outputLength:string;audience:string;platform:string};sources:Array<{kind:'url'|'text';url?:string;originalText?:string}>}};}).then(({article:saved})=>{
-      setArticleId(saved.id);setSubject(saved.subject);setArticle({headline:saved.headline,lead:saved.lead,body:saved.body});setMediaBias(saved.settings.mediaBias);if(saved.settings.mediaBiasId)setMediaBiasId(saved.settings.mediaBiasId);setValues([saved.settings.biasIntensity,saved.settings.criticalIntensity,saved.settings.excitement]);setOutputLength(saved.settings.outputLength);setAudience(saved.settings.audience);setPlatform(saved.settings.platform);
+    fetch(`${API_BASE}/api/articles/${encodeURIComponent(id)}`).then(async(response)=>{if(!response.ok)throw new Error('خبر پیدا نشد.');return await response.json() as {article:{id:string;subject:string;headline:string;lead:string;body:string;settings:{mediaBias:string;mediaBiasId?:string;biasIntensity:number;criticalIntensity:number;excitement:number;humorIntensity?:number;outputLength:string;audience:string;platform:string};sources:Array<{kind:'url'|'text';url?:string;originalText?:string}>}};}).then(({article:saved})=>{
+      setArticleId(saved.id);setSubject(saved.subject);setArticle({headline:saved.headline,lead:saved.lead,body:saved.body});setMediaBias(saved.settings.mediaBias);if(saved.settings.mediaBiasId)setMediaBiasId(saved.settings.mediaBiasId);setValues([saved.settings.biasIntensity,saved.settings.criticalIntensity,saved.settings.excitement,saved.settings.humorIntensity??0]);setOutputLength(saved.settings.outputLength);setAudience(saved.settings.audience);setPlatform(saved.settings.platform);
       const urls=saved.sources.filter((source)=>source.kind==='url'&&source.url).map((source)=>source.url!);const text=saved.sources.find((source)=>source.kind==='text')?.originalText;if(urls.length){setActiveSource('link');setLinks(urls);}else if(text){setActiveSource('text');setSourceText(text);}
     }).catch((error)=>setNotice(error.message));
   },[]);
@@ -101,4 +102,4 @@ export function Workspace() {
   </main>;
 }
 
-function toneFor(index:number,value:number){const scales=index===0?['تقریباً خنثی','ملایم','روشن','صریح','حداکثری']:index===1?['آرام و توصیفی','پرسشگر','صریح و چالشی','تند و مطالبه‌گر','بسیار تند']:['خشک و رسمی','روان','جذاب و رسانه‌ای','پرکشش','بسیار پرقدرت'];return scales[Math.min(4,Math.floor(value/21))];}
+function toneFor(index:number,value:number){const scales=index===0?['تقریباً خنثی','ملایم','روشن','صریح','حداکثری']:index===1?['آرام و توصیفی','پرسشگر','صریح و چالشی','تند و مطالبه‌گر','بسیار تند']:index===2?['خشک و رسمی','روان','جذاب و رسانه‌ای','پرکشش','بسیار پرقدرت']:['کاملاً جدی','طنز بسیار ظریف','طنز ملایم','طنز آشکار','کاملاً طنز'];return scales[Math.min(4,Math.floor(value/21))];}

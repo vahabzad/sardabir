@@ -6,6 +6,7 @@ export const settingsSchema = z.object({
   biasIntensity: z.number().int().min(0).max(100),
   criticalIntensity: z.number().int().min(0).max(100),
   excitement: z.number().int().min(0).max(100),
+  humorIntensity: z.number().int().min(0).max(100).default(0),
   outputLength: z.string().trim().min(1).max(100),
   audience: z.string().trim().min(1).max(100),
   platform: z.string().trim().min(1).max(100),

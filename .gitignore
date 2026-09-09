@@ -6,6 +6,7 @@ backend/jobs/
 app/node_modules/
 app/dist/
 app/.wrangler/
+app/.next/
 .env
 *.log
 .idea

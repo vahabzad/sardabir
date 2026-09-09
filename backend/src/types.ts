@@ -5,6 +5,7 @@ export type NewsSettings = {
   biasIntensity: number;
   criticalIntensity: number;
   excitement: number;
+  humorIntensity: number;
   outputLength: string;
   audience: string;
   platform: string;
