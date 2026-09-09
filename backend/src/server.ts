@@ -5,7 +5,7 @@ import express from "express";
 import helmet from "helmet";
 import { nanoid } from "nanoid";
 import { createBias, ensureDefaultBiases, findBias, listBiases, setBiasStatus, updateBias } from "./bias-store.js";
-import { generateBiasPrompt, generateNews, getLocalCodexStatus } from "./generator.js";
+import { generateBiasPrompt, generateNews, getLocalCodexStatus, prepareNewsPrompt } from "./generator.js";
 import { biasesRoot, dataRoot, jobsRoot } from "./paths.js";
 import { biasInputSchema, biasUpdateSchema, generationSchema, saveSchema } from "./schemas.js";
 import { findArticle, readDatabase, saveArticle } from "./store.js";
@@ -31,6 +31,11 @@ app.post("/api/generate",async(req,res)=>{
   try{const article=await generateNews(parsed.data);res.status(201).json({article:publicArticle(article),sources:article.sources});}
   catch(error){console.error(error);res.status(500).json({message:error instanceof Error?error.message:"تولید خبر ناموفق بود."});}
 });
+app.post("/api/prompts/preview",async(req,res)=>{
+  const parsed=generationSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({message:generationValidationMessage(parsed.error.issues)});
+  try{const prepared=await prepareNewsPrompt(parsed.data,undefined,{allowUnresolvedUrls:true});res.json({prompt:prepared.prompt,unresolvedSourceCount:prepared.unresolvedSourceCount});}
+  catch(error){console.error(error);res.status(500).json({message:error instanceof Error?error.message:"ساخت پرامپت نهایی ناموفق بود."});}
+});
 app.post("/api/generate/stream",async(req,res)=>{
   const parsed=generationSchema.safeParse(req.body);
   if(!parsed.success)return res.status(400).json({message:generationValidationMessage(parsed.error.issues)});
@@ -38,16 +43,16 @@ app.post("/api/generate/stream",async(req,res)=>{
   const send=(event:unknown)=>{if(!res.writableEnded)res.write(`${JSON.stringify(event)}\n`);};
   try{
     const article=await generateNews(parsed.data,(event)=>send({type:"progress",...event}));
-    send({type:"complete",article:publicArticle(article),sources:article.sources});
+    send({type:"complete",article:{...publicArticle(article),versionItems:article.versions},sources:article.sources});
   }catch(error){console.error(error);send({type:"error",message:error instanceof Error?error.message:"تولید خبر ناموفق بود."});}
   res.end();
 });
 app.post("/api/articles",async(req,res)=>{
   const parsed=saveSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({message:"اطلاعات خبر معتبر نیست."});
   const existing=parsed.data.id?await findArticle(parsed.data.id):undefined;const selectedBias=parsed.data.mediaBiasId?await findBias(parsed.data.mediaBiasId):undefined;const now=new Date().toISOString();const settings={mediaBias:selectedBias?.name||parsed.data.mediaBias,mediaBiasId:selectedBias?.id||parsed.data.mediaBiasId,mediaBiasPrompt:selectedBias?.prompt||existing?.settings.mediaBiasPrompt||"",biasIntensity:parsed.data.biasIntensity,criticalIntensity:parsed.data.criticalIntensity,excitement:parsed.data.excitement,humorIntensity:parsed.data.humorIntensity,outputLength:parsed.data.outputLength,audience:parsed.data.audience,platform:parsed.data.platform};
-  const sources=(parsed.data.sources||existing?.sources||[]) as NewsSource[];const version={id:nanoid(10),headline:parsed.data.headline,lead:parsed.data.lead,body:parsed.data.body,settings,createdAt:now};
+  const sources=(parsed.data.sources||existing?.sources||[]) as NewsSource[];const version={id:nanoid(10),headline:parsed.data.headline,lead:parsed.data.lead,body:parsed.data.body,...(existing?.versions[0]?.prompt?{prompt:existing.versions[0].prompt}:{}),settings,...(existing?.generationUsage?{generationUsage:existing.generationUsage}:{}),createdAt:now};
   const article:NewsArticle={id:existing?.id||nanoid(12),subject:parsed.data.subject,headline:parsed.data.headline,lead:parsed.data.lead,body:parsed.data.body,settings,sources,versions:[version,...(existing?.versions||[])],generationUsage:existing?.generationUsage,threadId:existing?.threadId,status:parsed.data.status||"draft",createdAt:existing?.createdAt||now,updatedAt:now};
-  await saveArticle(article);res.status(201).json({id:article.id,updatedAt:article.updatedAt});
+  await saveArticle(article);res.status(201).json({id:article.id,updatedAt:article.updatedAt,versions:article.versions});
 });
 app.use((error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{console.error(error);res.status(500).json({message:"خطای داخلی سرویس محلی"});});
 app.listen(port,()=>console.log(`Sardabir local API: http://localhost:${port}`));

@@ -51,6 +51,7 @@ export type NewsVersion = {
   headline: string;
   lead: string;
   body: string;
+  prompt?: string;
   settings: NewsSettings;
   generationUsage?: GenerationUsage;
   createdAt: string;

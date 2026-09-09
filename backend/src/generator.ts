@@ -26,6 +26,9 @@ const MODEL_USAGE_RATES:Record<string,{input:number;cachedInput:number;output:nu
 
 export type GenerationProgress = {level:"info"|"success"|"warning";message:string};
 
+type GenerateNewsInput = { articleId?:string; subject:string; sources:Array<{kind:"url"|"text";value:string}> } & NewsSettings;
+type PreparedNews = {prompt:string;settings:NewsSettings;sources:NewsSource[];failedSources:Array<{label:string;message:string}>;unresolvedSourceCount:number};
+
 export async function getLocalCodexStatus(){
   const executable=await resolveCodexExecutable();
   if(!executable) return {ready:false,message:"Codex محلی روی سیستم پیدا نشد."};
@@ -39,14 +42,8 @@ export async function getLocalCodexStatus(){
   }
 }
 
-export async function generateNews(input:{ articleId?:string; subject:string; sources:Array<{kind:"url"|"text";value:string}> } & NewsSettings,onProgress?:(event:GenerationProgress)=>void){
+export async function prepareNewsPrompt(input:GenerateNewsInput,onProgress?:(event:GenerationProgress)=>void,options:{allowUnresolvedUrls?:boolean}={}):Promise<PreparedNews>{
   const progress=(level:GenerationProgress["level"],message:string)=>onProgress?.({level,message});
-  progress("info","بررسی اتصال Codex…");
-  const login=await getLocalCodexStatus();
-  if(!login.ready) throw new Error("Codex محلی وارد حساب ChatGPT نیست. دستور npm run codex:login را اجرا کنید.");
-  progress("success","اتصال Codex آماده است.");
-  const existing=input.articleId?await findArticle(input.articleId):undefined;
-  const articleId=existing?.id||nanoid(12);
   progress("info",`بررسی ${input.sources.length} منبع آغاز شد.`);
   const sourceResults=await Promise.all(input.sources.map(async(source,index)=>{
     const label=sourceLabel(source,index);
@@ -57,19 +54,37 @@ export async function generateNews(input:{ articleId?:string; subject:string; so
       return {ok:true as const,source:resolved};
     }catch(error){
       const message=error instanceof Error?error.message:"منبع قابل خواندن نبود.";
+      if(options.allowUnresolvedUrls&&source.kind==="url"){
+        const fallback=unresolvedUrlSource(source.value);
+        if(fallback){progress("warning",`${label} قابل استخراج نبود و با لینک خام در پرامپت قرار گرفت.`);return {ok:true as const,source:fallback,unresolved:{label,message}};}
+      }
       progress("warning",`${label} استفاده نشد: ${message}`);
       return {ok:false as const,label,message};
     }
   }));
   const resolvedSources=sourceResults.filter((result):result is Extract<(typeof sourceResults)[number],{ok:true}>=>result.ok).map((result)=>result.source);
   const failedSources=sourceResults.filter((result):result is Extract<(typeof sourceResults)[number],{ok:false}>=>!result.ok);
+  const unresolvedSourceCount=sourceResults.filter((result)=>result.ok&&"unresolved" in result).length;
   if(!resolvedSources.length)throw new Error(`هیچ منبع قابل‌استفاده‌ای باقی نماند. ${failedSources.map((item)=>item.label).join("، ")}`);
   progress(failedSources.length?"warning":"success",failedSources.length?`${resolvedSources.length} منبع قابل استفاده است و ${failedSources.length} منبع کنار گذاشته شد.`:`هر ${resolvedSources.length} منبع قابل استفاده است.`);
   const template=await readFile(promptFile,"utf8");
   const selectedBias=input.mediaBiasId?await findBias(input.mediaBiasId):undefined;
   const settings:NewsSettings={mediaBias:selectedBias?.name||input.mediaBias,mediaBiasId:selectedBias?.id,mediaBiasPrompt:selectedBias?.prompt||"",biasIntensity:input.biasIntensity,criticalIntensity:input.criticalIntensity,excitement:input.excitement,humorIntensity:input.humorIntensity,outputLength:input.outputLength,audience:input.audience,platform:input.platform};
   const sourcePacket=resolvedSources.map((source,index)=>`منبع ${index+1}${source.url?` — ${source.url}`:""}:\n${source.extractedText}`).join("\n\n---\n\n");
-  const prompt=`${template}\n\nراهنمای اختصاصی گرایش انتخاب‌شده:\n${settings.mediaBiasPrompt||`گرایش ${settings.mediaBias} را فقط مطابق شدت تعیین‌شده اعمال کن.`}\n\nاطلاعات واقعی این اجرا:\nموضوع خبر: ${input.subject}\nگرایش رسانه‌ای: ${settings.mediaBias}\nشدت گرایش رسانه‌ای: ${input.biasIntensity}\nشدت لحن انتقادی: ${input.criticalIntensity}\nجذابیت و هیجان رسانه‌ای: ${input.excitement}\nمیزان طنز در لحن خبر: ${input.humorIntensity} (۰ کاملاً جدی، ۱۰۰ کاملاً طنز)\nحجم خروجی: ${input.outputLength}\nمخاطب: ${input.audience}\nبستر انتشار: ${input.platform}\n\nمنابع خبر:\n${sourcePacket}\n\nفقط خروجی نهایی را با سه بخش «تیتر:»، «لید:» و «متن خبر:» برگردان.`;
+  const prompt=`${template}\n\nراهنمای اختصاصی گرایش انتخاب‌شده:\n${settings.mediaBiasPrompt||`گرایش ${settings.mediaBias} را فقط مطابق شدت تعیین‌شده اعمال کن.`}\n\nاطلاعات واقعی این اجرا:\nموضوع خبر: ${input.subject}\nگرایش رسانه‌ای: ${settings.mediaBias}\nشدت گرایش رسانه‌ای: ${input.biasIntensity}\nشدت لحن انتقادی: ${input.criticalIntensity}\nجذابیت و هیجان رسانه‌ای: ${input.excitement}\nشدت طنز و سوژه‌پردازی: ${input.humorIntensity} (۰ کاملاً جدی، ۱۰۰ سوژه‌سازی و جوک‌پردازی تمام‌عیار)\nدستور اجرایی این شدت: ${humorDirective(input.humorIntensity)}\nحجم خروجی: ${input.outputLength}\nمخاطب: ${input.audience}\nبستر انتشار: ${input.platform}\n\nمنابع خبر:\n${sourcePacket}\n\nفقط خروجی نهایی را با سه بخش «تیتر:»، «لید:» و «متن خبر:» برگردان.`;
+
+  return {prompt,settings,sources:resolvedSources,failedSources,unresolvedSourceCount};
+}
+
+export async function generateNews(input:GenerateNewsInput,onProgress?:(event:GenerationProgress)=>void){
+  const progress=(level:GenerationProgress["level"],message:string)=>onProgress?.({level,message});
+  progress("info","بررسی اتصال Codex…");
+  const login=await getLocalCodexStatus();
+  if(!login.ready) throw new Error("Codex محلی وارد حساب ChatGPT نیست. دستور npm run codex:login را اجرا کنید.");
+  progress("success","اتصال Codex آماده است.");
+  const existing=input.articleId?await findArticle(input.articleId):undefined;
+  const articleId=existing?.id||nanoid(12);
+  const {prompt,settings,sources:resolvedSources,failedSources}=await prepareNewsPrompt(input,onProgress);
 
   const executable=await resolveCodexExecutable(); if(!executable) throw new Error("فایل اجرایی Codex پیدا نشد.");
   const workspace=articleWorkspace(articleId); await mkdir(workspace,{recursive:true});
@@ -83,7 +98,7 @@ export async function generateNews(input:{ articleId?:string; subject:string; so
   const parsed=parseOutput(result.finalResponse);
   const generationUsage=buildGenerationUsage(model,result.usage);
   const now=new Date().toISOString();
-  const version={id:nanoid(10),...parsed,settings,...(generationUsage?{generationUsage}:{}),createdAt:now};
+  const version={id:nanoid(10),...parsed,prompt,settings,...(generationUsage?{generationUsage}:{}),createdAt:now};
   const article:NewsArticle={id:articleId,subject:input.subject,...parsed,settings,sources:resolvedSources,versions:[version,...(existing?.versions||[])],...(generationUsage?{generationUsage}:{}),threadId:thread.id||existing?.threadId,status:"draft",createdAt:existing?.createdAt||now,updatedAt:now};
   await saveArticle(article);
   progress("success","خبر و آمار مصرف آن در آرشیو ذخیره شد.");
@@ -100,6 +115,14 @@ export async function generateBiasPrompt(input:{name:string;worldview:string;ton
   const request=`برای یک سامانه تولید خبر فارسی، فایل راهنمای تحریریه یک گرایش رسانه‌ای را بنویس. این فایل در کنار پرامپت اصلی استفاده می‌شود و باید اجرایی، دقیق و قابل ویرایش باشد.\n\nنام گرایش: ${input.name}\nجهان‌بینی: ${input.worldview}\nلحن: ${input.tone}\nاهداف: ${input.goals}\nخط قرمزها: ${input.redLines}\n\nالزامات:\n- به فارسی و با قالب Markdown بنویس.\n- بخش‌های «تعریف زاویه»، «اولویت‌های روایی»، «لحن و واژگان»، «نحوه اعمال شدت صفر تا صد»، «الزامات صحت خبر» و «خط قرمزها» را داشته باشد.\n- شدت صفر باید نزدیک به روایت خنثی و شدت صد نمایانگر کامل این زاویه باشد.\n- دستور جعل واقعیت، نقل‌قول یا منبع ندهد و خبر را با تبلیغات اشتباه نگیرد.\n- فقط متن نهایی فایل Markdown را برگردان و توضیح اضافه نده.`;
   const result=await thread.run(request);
   return result.finalResponse.replace(/^```(?:markdown)?\s*/i,"").replace(/\s*```$/," ").trim();
+}
+
+function humorDirective(value:number){
+  if(value<=20)return "خبر را کاملاً جدی بنویس و از شوخی، کنایه و بازی زبانی استفاده نکن.";
+  if(value<=40)return "فقط چند کنایه یا شوخی بسیار ظریف به کار ببر و ساختار خبر جدی را حفظ کن.";
+  if(value<=60)return "در چند جای متن طنز روشن، تشبیه بامزه یا پایان‌بندی شوخ بساز، بدون اینکه سوژه‌پردازی بر خبر غالب شود.";
+  if(value<=80)return "تناقض یا رفتار بازیگر اصلی را به سوژه طنز تبدیل کن؛ تیتر طناز و چند شوخی، بازی زبانی و ضربه طنز روشن در متن لازم است.";
+  return "خروجی را به طنز خبری تمام‌عیار نزدیک کن: سوژه اصلی را فعالانه دستمایه جوک و کنایه تند قرار بده، تیتر طناز بساز و در سراسر متن چندین شوخی، تشبیه کمیک، اغراق بلاغی آشکار و punchline بیاور. طنز باید بخش غالب روایت باشد، نه تزئین آن؛ واقعیت، انتساب و ایمنی قربانیان را حفظ کن.";
 }
 
 function parseOutput(output:string){
@@ -133,6 +156,10 @@ function buildGenerationUsage(model:string,usage:{input_tokens:number;cached_inp
 function sourceLabel(source:{kind:"url"|"text";value:string},index:number){
   if(source.kind==="text")return `متن واردشده شماره ${index+1}`;
   try{return `منبع ${index+1} (${new URL(source.value).hostname})`;}catch{return `منبع ${index+1}`;}
+}
+
+function unresolvedUrlSource(value:string):NewsSource|undefined{
+  try{const url=new URL(value);if(!["http:","https:"].includes(url.protocol)||isPrivateHost(url.hostname))return undefined;return{id:nanoid(10),kind:"url",url:url.toString(),title:url.hostname,extractedText:`محتوای این منبع به‌صورت خودکار قابل استخراج نبود. نشانی منبع برای دسترسی مستقیم: ${url.toString()}`,createdAt:new Date().toISOString()};}catch{return undefined;}
 }
 
 async function resolveSource(source:{kind:"url"|"text";value:string}):Promise<NewsSource>{
