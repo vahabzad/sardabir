@@ -71,9 +71,28 @@ export async function prepareNewsPrompt(input:GenerateNewsInput,onProgress?:(eve
   const selectedBias=input.mediaBiasId?await findBias(input.mediaBiasId):undefined;
   const settings:NewsSettings={mediaBias:selectedBias?.name||input.mediaBias,mediaBiasId:selectedBias?.id,mediaBiasPrompt:selectedBias?.prompt||"",biasIntensity:input.biasIntensity,criticalIntensity:input.criticalIntensity,excitement:input.excitement,humorIntensity:input.humorIntensity,outputLength:input.outputLength,audience:input.audience,platform:input.platform};
   const sourcePacket=resolvedSources.map((source,index)=>`منبع ${index+1}${source.url?` — ${source.url}`:""}:\n${source.extractedText}`).join("\n\n---\n\n");
-  const prompt=`${template}\n\nراهنمای اختصاصی گرایش انتخاب‌شده:\n${settings.mediaBiasPrompt||`گرایش ${settings.mediaBias} را فقط مطابق شدت تعیین‌شده اعمال کن.`}\n\nاطلاعات واقعی این اجرا:\nموضوع خبر: ${input.subject}\nگرایش رسانه‌ای: ${settings.mediaBias}\nشدت گرایش رسانه‌ای: ${input.biasIntensity}\nشدت لحن انتقادی: ${input.criticalIntensity}\nجذابیت و هیجان رسانه‌ای: ${input.excitement}\nشدت طنز و سوژه‌پردازی: ${input.humorIntensity} (۰ کاملاً جدی، ۱۰۰ سوژه‌سازی و جوک‌پردازی تمام‌عیار)\nدستور اجرایی این شدت: ${humorDirective(input.humorIntensity)}\nحجم خروجی: ${input.outputLength}\nمخاطب: ${input.audience}\nبستر انتشار: ${input.platform}\n\nمنابع خبر:\n${sourcePacket}\n\nفقط خروجی نهایی را با سه بخش «تیتر:»، «لید:» و «متن خبر:» برگردان.`;
+  const unresolvedDirective=unresolvedSourceCount?"\n- بازیابی منبع: محتوای یک یا چند لینک در مرحله آماده‌سازی قابل استخراج نبود. پیش از نوشتن، نشانی‌های درج‌شده را با دسترسی شبکه باز کن و فقط از محتوای واقعی بازیابی‌شده استفاده کن؛ اگر صفحه باز نشد، بر پایه موضوع یا نشانی لینک واقعیت، عدد یا نقل‌قول نساز.":"";
+  const prompt=`${template}\n\nراهنمای اختصاصی گرایش انتخاب‌شده:\n${settings.mediaBiasPrompt||`گرایش ${settings.mediaBias} را فقط مطابق شدت تعیین‌شده اعمال کن.`}\n\nاطلاعات واقعی این اجرا:\nموضوع خبر: ${input.subject}\nگرایش رسانه‌ای: ${settings.mediaBias}\nشدت گرایش رسانه‌ای: ${input.biasIntensity}\nشدت لحن انتقادی: ${input.criticalIntensity}\nجذابیت و هیجان رسانه‌ای: ${input.excitement}\nشدت طنز و سوژه‌پردازی: ${input.humorIntensity} (۰ کاملاً جدی، ۱۰۰ سوژه‌سازی و جوک‌پردازی تمام‌عیار)\nدستور اجرایی این شدت: ${humorDirective(input.humorIntensity)}\nحجم خروجی: ${input.outputLength}\nمخاطب: ${input.audience}\nبستر انتشار: ${input.platform}\n\nقواعد اجرایی الزامی این خروجی:\n- حجم: متن کامل خروجی باید در بازه «${input.outputLength}» بماند؛ اطلاعات را متناسب با این سقف اولویت‌بندی و فشرده کن.\n- مخاطب: ${audienceDirective(input.audience)}\n- بستر انتشار: ${platformDirective(input.platform)}\n- قاعده ترکیب: سطح واژگان و عمق اطلاعات را «مخاطب» تعیین می‌کند و ساختار، ریتم و شیوه ارائه را «بستر انتشار». هر دو را هم‌زمان و به‌طور محسوس اجرا کن. این قواعد اجرایی بر توصیه‌های عمومی‌تر قالب مقدم‌اند.${unresolvedDirective}\n\nمنابع خبر:\n${sourcePacket}\n\nفقط خروجی نهایی را با سه بخش «تیتر:»، «لید:» و «متن خبر:» برگردان.`;
 
   return {prompt,settings,sources:resolvedSources,failedSources,unresolvedSourceCount};
+}
+
+export function audienceDirective(audience:string){
+  if(audience==="عموم مردم")return "برای خواننده بدون دانش قبلی بنویس. اصطلاح تخصصی، مخفف و جزئیات فنیِ غیرضروری را حذف کن؛ هر اصطلاح تخصصیِ ضروری را همان بار اول با زبان روزمره و کوتاه توضیح بده. جمله‌ها روشن و کوتاه باشند و فقط اطلاعاتی را نگه دار که برای فهم اصل رویداد و اثر آن بر زندگی مردم لازم است.";
+  if(audience==="مخاطب تخصصی")return "واژگان دقیق تخصصی، داده‌ها، سازوکارها و جزئیات فنیِ مرتبط را حفظ کن و از ساده‌سازی‌ای که دقت را از بین می‌برد بپرهیز. از توضیح بدیهیات رشته خودداری کن، اما ادعا و عدم‌قطعیت را دقیق نشان بده.";
+  if(audience==="مخاطب سیاسی")return "بر بازیگران، نهادها، مواضع، موازنه قدرت و پیامدهای سیاستی تمرکز کن. اصطلاح فنیِ خارج از حوزه سیاست را کوتاه توضیح بده و از جزئیات تخصصی‌ای که به پیامد سیاسی کمک نمی‌کند صرف‌نظر کن.";
+  if(audience==="کاربران شبکه‌های اجتماعی")return "بدون فرض دانش قبلی، مستقیم و قابل‌فهم بنویس. زمینه را به حداقل لازم کاهش بده، جمله‌ها و بندها را کوتاه نگه دار و از آمار، مخفف و اصطلاح تخصصیِ بدون توضیح پرهیز کن.";
+  return `سطح واژگان، میزان پیش‌زمینه و انتخاب جزئیات را مشخصاً برای «${audience}» تنظیم کن و اطلاعات تخصصیِ نامتناسب را وارد متن نکن.`;
+}
+
+export function platformDirective(platform:string){
+  if(platform==="وب‌سایت خبری")return "تیتر روشن و جست‌وجوپذیر، لید مستقل و بدنه با هرم وارونه بنویس؛ مهم‌ترین واقعیت ابتدا، سپس جزئیات و زمینه. بندها کوتاه باشند و از هشتگ و ایموجی استفاده نکن.";
+  if(platform==="روزنامه")return "لحن چاپی، رسمی و یکدست با تیتر موجز و روایت پیوسته بساز. زمینه و اتصال منطقی بندها را تقویت کن و از هشتگ، ایموجی و خطاب مستقیم پرهیز کن.";
+  if(platform==="خبرنامه")return "تیتر را شبیه موضوع جذاب خبرنامه و لید را پاسخ روشن به «چرا مهم است» بنویس. بدنه را گزیده، توضیحی و رو به خواننده تنظیم کن و در پایان جمع‌بندی کوتاهی از پیامد اصلی بده؛ اطلاعات تازه نساز.";
+  if(platform==="تلگرام")return "برای خواندن روی موبایل بنویس: تیتر ضربه‌دار، لید بسیار کوتاه و بندهای یک تا دو جمله‌ای. اصل خبر را در چند خط نخست کامل منتقل کن؛ از مقدمه طولانی، جدول و تکرار بپرهیز و حداکثر دو هشتگ مرتبط در پایان متن خبر بیاور.";
+  if(platform==="اینستاگرام")return "خروجی را مانند کپشن خبری بساز: تیترِ قلاب‌دار، لید یک‌جمله‌ای و بدنه‌ای کوتاه با شکست خط فراوان. نکته اصلی را همان ابتدا بگو و در پایان حداکثر سه هشتگ دقیق و مرتبط بیاور؛ از جدول و جزئیات سنگین پرهیز کن.";
+  if(platform==="شبکه اجتماعی")return "خروجی را سریع و فشرده بساز: تیتر کوتاه، لید یک‌جمله‌ای و بدنه با جمله‌های مستقل و قابل اسکن. مهم‌ترین نکته و پیامد را جلو بینداز، تکرار و زمینه طولانی را حذف کن و حداکثر دو هشتگ مرتبط در پایان بیاور.";
+  return `قالب، طول بند، ریتم تیتر و شیوه ارائه را متناسب با قواعد رایج «${platform}» تغییر بده تا خروجی آن با وب‌سایت خبری یکسان نباشد.`;
 }
 
 export async function generateNews(input:GenerateNewsInput,onProgress?:(event:GenerationProgress)=>void){
@@ -84,14 +103,15 @@ export async function generateNews(input:GenerateNewsInput,onProgress?:(event:Ge
   progress("success","اتصال Codex آماده است.");
   const existing=input.articleId?await findArticle(input.articleId):undefined;
   const articleId=existing?.id||nanoid(12);
-  const {prompt,settings,sources:resolvedSources,failedSources}=await prepareNewsPrompt(input,onProgress);
+  const {prompt,settings,sources:resolvedSources,failedSources,unresolvedSourceCount}=await prepareNewsPrompt(input,onProgress,{allowUnresolvedUrls:true});
 
   const executable=await resolveCodexExecutable(); if(!executable) throw new Error("فایل اجرایی Codex پیدا نشد.");
   const workspace=articleWorkspace(articleId); await mkdir(workspace,{recursive:true});
   const model=await resolveCodexModel();
   progress("info",`تولید خبر با مدل ${model} آغاز شد…`);
   const codex=new Codex({codexPathOverride:executable,env:localCodexEnvironment(),config:{forced_login_method:"chatgpt",cli_auth_credentials_store:"file"}});
-  const threadOptions={workingDirectory:workspace,skipGitRepoCheck:true,sandboxMode:"read-only" as const,approvalPolicy:"never" as const,networkAccessEnabled:false,model};
+  if(unresolvedSourceCount)progress("warning",`${unresolvedSourceCount} لینک با دریافت مستقیم باز نشد؛ Codex تلاش می‌کند محتوای آن را از نشانی اصلی بازیابی کند.`);
+  const threadOptions={workingDirectory:workspace,skipGitRepoCheck:true,sandboxMode:"read-only" as const,approvalPolicy:"never" as const,networkAccessEnabled:unresolvedSourceCount>0,model};
   const thread=existing?.threadId?codex.resumeThread(existing.threadId,threadOptions):codex.startThread(threadOptions);
   const result=await thread.run(prompt);
   progress("success","پاسخ Codex دریافت شد؛ در حال پردازش خروجی…");
