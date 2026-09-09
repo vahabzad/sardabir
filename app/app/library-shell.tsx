@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { Archive, FileText, Link2, Newspaper, Search, Settings2, SlidersHorizontal } from 'lucide-react';
 
 type Mode = 'archive' | 'sources';
-type Article = { id:string; subject:string; headline:string; lead:string; mediaBias:string; biasIntensity:number; status:string; updatedAt:number };
+type GenerationUsage = { model:string; totalTokens:number; estimatedApiCostUsd:number|null; fiveHourEstimatePercent:{min:number;max:number}|null };
+type Article = { id:string; subject:string; headline:string; lead:string; mediaBias:string; biasIntensity:number; status:string; updatedAt:number; generationUsage?:GenerationUsage };
 type Source = { id:string; kind:string; url:string|null; title:string|null; articleId:string; headline:string; createdAt:number };
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:4000';
 
@@ -45,6 +46,7 @@ export function LibraryShell({ mode }: { mode: Mode }) {
       {loading?<div className="library-empty"><span className="empty-loader"/><h2>در حال خواندن اطلاعات…</h2></div>:mode==='archive'?(filteredArticles.length?<div className="archive-grid">{filteredArticles.map((article,index)=><article className="archive-card" key={article.id}>
         <div className="card-top"><span className={`article-status ${article.status}`}>{article.status==='ready'?'آماده انتشار':'پیش‌نویس'}</span><span>۰{index+1}</span></div>
         <span className="card-subject">{article.subject}</span><h2>{article.headline}</h2><p>{article.lead}</p>
+        {article.generationUsage?<div className="archive-usage"><span>{new Intl.NumberFormat('fa-IR').format(article.generationUsage.totalTokens)} توکن</span><span dir="ltr">{article.generationUsage.estimatedApiCostUsd===null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:3,maximumFractionDigits:4}).format(article.generationUsage.estimatedApiCostUsd)}</span><span>{formatQuota(article.generationUsage.fiveHourEstimatePercent)}</span></div>:<div className="archive-usage archive-usage-empty"><span>آمار مصرف ثبت نشده</span></div>}
         <div className="bias-meter"><div><span>گرایش</span><b>{article.mediaBias}</b></div><div className="meter"><i style={{width:`${article.biasIntensity}%`}}/></div><strong>{article.biasIntensity}</strong></div>
         <footer><span>{new Intl.DateTimeFormat('fa-IR',{dateStyle:'medium'}).format(article.updatedAt)}</span><Link href={`/?article=${article.id}`}>بازکردن و ویرایش ←</Link></footer>
       </article>)}</div>:<div className="library-empty"><Archive/><h2>{query?'خبری با این مشخصات پیدا نشد':'هنوز خبری ذخیره نکرده‌اید'}</h2><p>{query?'عبارت جست‌وجو را تغییر دهید.':'پس از تولید و ذخیره اولین خبر، اینجا در دسترس خواهد بود.'}</p>{!query&&<Link href="/">تولید اولین خبر</Link>}</div>):(filteredSources.length?<div className="source-list">{filteredSources.map((source,index)=><article className="source-card" key={source.id}>
@@ -54,4 +56,10 @@ export function LibraryShell({ mode }: { mode: Mode }) {
       </article>)}</div>:<div className="library-empty"><Link2/><h2>{query?'منبعی با این مشخصات پیدا نشد':'هنوز منبعی ثبت نشده است'}</h2><p>{query?'عبارت جست‌وجو را تغییر دهید.':'منابع لینک و متن، همراه با خبر ذخیره‌شده در این بخش ظاهر می‌شوند.'}</p>{!query&&<Link href="/">افزودن منبع و تولید خبر</Link>}</div>)}
     </section>
   </main>;
+}
+
+function formatQuota(value:{min:number;max:number}|null){
+  if(!value)return 'سهمیه نامشخص';
+  const format=(number:number)=>new Intl.NumberFormat('fa-IR',{maximumFractionDigits:number<1?2:1}).format(number);
+  return `حدود ${format(value.min)}٪–${format(value.max)}٪ سهمیه`;
 }

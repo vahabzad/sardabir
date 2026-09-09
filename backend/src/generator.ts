@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import { nanoid } from "nanoid";
 import { Codex } from "@openai/codex-sdk";
@@ -8,10 +10,19 @@ import { localCodexEnvironment } from "./codex-environment.js";
 import { articleWorkspace, biasWorkspace, promptFile } from "./paths.js";
 import { resolveCodexExecutable } from "./codex-executable.js";
 import { findArticle, saveArticle } from "./store.js";
-import type { NewsArticle, NewsSettings, NewsSource } from "./types.js";
+import type { GenerationUsage, NewsArticle, NewsSettings, NewsSource } from "./types.js";
 
 const execFileAsync=promisify(execFile);
 const FILE_CREDENTIAL_ARGS=["--config",'cli_auth_credentials_store="file"'];
+const DEFAULT_CODEX_MODEL="gpt-5.6-sol";
+// Dollar/credit rates are per 1M tokens; five-hour ranges are the published Plus local-message estimates.
+const MODEL_USAGE_RATES:Record<string,{input:number;cachedInput:number;output:number;credits:{input:number;cachedInput:number;output:number};fiveHour:{min:number;max:number}}>= {
+  "gpt-6-astra":{input:10,cachedInput:1,output:50,credits:{input:250,cachedInput:25,output:1250},fiveHour:{min:100/45,max:100/5}},
+  "gpt-5.6-sol":{input:4,cachedInput:.4,output:20,credits:{input:100,cachedInput:10,output:500},fiveHour:{min:1,max:10}},
+  "gpt-5.6":{input:4,cachedInput:.4,output:20,credits:{input:100,cachedInput:10,output:500},fiveHour:{min:1,max:10}},
+  "gpt-5.6-terra":{input:2,cachedInput:.2,output:12,credits:{input:50,cachedInput:5,output:300},fiveHour:{min:.5,max:4}},
+  "gpt-5.6-luna":{input:.2,cachedInput:.02,output:1.2,credits:{input:5,cachedInput:.5,output:30},fiveHour:{min:.05,max:.4}},
+};
 
 export async function getLocalCodexStatus(){
   const executable=await resolveCodexExecutable();
@@ -40,14 +51,16 @@ export async function generateNews(input:{ articleId?:string; subject:string; so
 
   const executable=await resolveCodexExecutable(); if(!executable) throw new Error("فایل اجرایی Codex پیدا نشد.");
   const workspace=articleWorkspace(articleId); await mkdir(workspace,{recursive:true});
+  const model=await resolveCodexModel();
   const codex=new Codex({codexPathOverride:executable,env:localCodexEnvironment(),config:{forced_login_method:"chatgpt",cli_auth_credentials_store:"file"}});
-  const threadOptions={workingDirectory:workspace,skipGitRepoCheck:true,sandboxMode:"read-only" as const,approvalPolicy:"never" as const,networkAccessEnabled:false,...(process.env.CODEX_MODEL?{model:process.env.CODEX_MODEL}:{})};
+  const threadOptions={workingDirectory:workspace,skipGitRepoCheck:true,sandboxMode:"read-only" as const,approvalPolicy:"never" as const,networkAccessEnabled:false,model};
   const thread=existing?.threadId?codex.resumeThread(existing.threadId,threadOptions):codex.startThread(threadOptions);
   const result=await thread.run(prompt);
   const parsed=parseOutput(result.finalResponse);
+  const generationUsage=buildGenerationUsage(model,result.usage);
   const now=new Date().toISOString();
-  const version={id:nanoid(10),...parsed,settings,createdAt:now};
-  const article:NewsArticle={id:articleId,subject:input.subject,...parsed,settings,sources:resolvedSources,versions:[version,...(existing?.versions||[])],threadId:thread.id||existing?.threadId,status:"draft",createdAt:existing?.createdAt||now,updatedAt:now};
+  const version={id:nanoid(10),...parsed,settings,...(generationUsage?{generationUsage}:{}),createdAt:now};
+  const article:NewsArticle={id:articleId,subject:input.subject,...parsed,settings,sources:resolvedSources,versions:[version,...(existing?.versions||[])],...(generationUsage?{generationUsage}:{}),threadId:thread.id||existing?.threadId,status:"draft",createdAt:existing?.createdAt||now,updatedAt:now};
   await saveArticle(article);
   return article;
 }
@@ -68,6 +81,27 @@ function parseOutput(output:string){
   const match=clean.match(/تیتر\s*:\s*([\s\S]*?)\n\s*لید\s*:\s*([\s\S]*?)\n\s*متن خبر\s*:\s*([\s\S]*)/);
   if(!match) throw new Error("خروجی Codex ساختار تیتر، لید و متن خبر را نداشت.");
   return {headline:match[1].trim(),lead:match[2].trim(),body:match[3].trim()};
+}
+
+async function resolveCodexModel(){
+  if(process.env.CODEX_MODEL?.trim())return process.env.CODEX_MODEL.trim();
+  const codexRoot=process.env.CODEX_HOME?.trim()||path.join(homedir(),".codex");
+  try{
+    const config=await readFile(path.join(codexRoot,"config.toml"),"utf8");
+    return config.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1]||DEFAULT_CODEX_MODEL;
+  }catch{return DEFAULT_CODEX_MODEL;}
+}
+
+function buildGenerationUsage(model:string,usage:{input_tokens:number;cached_input_tokens:number;output_tokens:number}|null):GenerationUsage|undefined{
+  if(!usage)return undefined;
+  const inputTokens=Math.max(0,usage.input_tokens);
+  const cachedInputTokens=Math.min(inputTokens,Math.max(0,usage.cached_input_tokens));
+  const outputTokens=Math.max(0,usage.output_tokens);
+  const uncachedInputTokens=inputTokens-cachedInputTokens;
+  const rates=MODEL_USAGE_RATES[model.toLowerCase()];
+  const estimatedApiCostUsd=rates?((uncachedInputTokens*rates.input)+(cachedInputTokens*rates.cachedInput)+(outputTokens*rates.output))/1_000_000:null;
+  const estimatedCredits=rates?((uncachedInputTokens*rates.credits.input)+(cachedInputTokens*rates.credits.cachedInput)+(outputTokens*rates.credits.output))/1_000_000:null;
+  return {model,inputTokens,cachedInputTokens,outputTokens,totalTokens:inputTokens+outputTokens,estimatedApiCostUsd,estimatedCredits,fiveHourEstimatePercent:rates?.fiveHour||null};
 }
 
 async function resolveSource(source:{kind:"url"|"text";value:string}):Promise<NewsSource>{

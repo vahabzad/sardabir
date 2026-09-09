@@ -35,12 +35,24 @@ export type NewsSource = {
   createdAt: string;
 };
 
+export type GenerationUsage = {
+  model: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimatedApiCostUsd: number | null;
+  estimatedCredits: number | null;
+  fiveHourEstimatePercent: { min: number; max: number } | null;
+};
+
 export type NewsVersion = {
   id: string;
   headline: string;
   lead: string;
   body: string;
   settings: NewsSettings;
+  generationUsage?: GenerationUsage;
   createdAt: string;
 };
 
@@ -53,6 +65,7 @@ export type NewsArticle = {
   settings: NewsSettings;
   sources: NewsSource[];
   versions: NewsVersion[];
+  generationUsage?: GenerationUsage;
   threadId?: string;
   status: "draft" | "ready";
   createdAt: string;

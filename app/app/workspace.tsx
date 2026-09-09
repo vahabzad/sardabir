@@ -15,6 +15,8 @@ const controls = [
 ];
 type ArticleDraft = { headline:string; lead:string; body:string };
 type BiasOption = { id:string; name:string; status:'active'|'archived' };
+type GenerationUsage = { model:string; inputTokens:number; cachedInputTokens:number; outputTokens:number; totalTokens:number; estimatedApiCostUsd:number|null; estimatedCredits:number|null; fiveHourEstimatePercent:{min:number;max:number}|null };
+type ArticleDraftWithUsage = ArticleDraft & { generationUsage?:GenerationUsage };
 
 export function Workspace() {
   const [activeSource,setActiveSource]=useState<'link'|'text'>('link');
@@ -32,7 +34,7 @@ export function Workspace() {
   const [codexStatus,setCodexStatus]=useState<'checking'|'ready'|'offline'>('checking');
   const [notice,setNotice]=useState('');
   const [articleId,setArticleId]=useState<string>();
-  const [article,setArticle]=useState<ArticleDraft|null>(null);
+  const [article,setArticle]=useState<ArticleDraftWithUsage|null>(null);
 
   const settings={mediaBias,mediaBiasId,biasIntensity:values[0],criticalIntensity:values[1],excitement:values[2],humorIntensity:values[3],outputLength,audience,platform};
   const enteredSources=activeSource==='link'?links.filter(Boolean).map((value)=>({kind:'url' as const,value})):sourceText.trim()?[{kind:'text' as const,value:sourceText}]:[];
@@ -62,8 +64,8 @@ export function Workspace() {
 
   useEffect(()=>{
     const id=new URLSearchParams(window.location.search).get('article');if(!id)return;
-    fetch(`${API_BASE}/api/articles/${encodeURIComponent(id)}`).then(async(response)=>{if(!response.ok)throw new Error('خبر پیدا نشد.');return await response.json() as {article:{id:string;subject:string;headline:string;lead:string;body:string;settings:{mediaBias:string;mediaBiasId?:string;biasIntensity:number;criticalIntensity:number;excitement:number;humorIntensity?:number;outputLength:string;audience:string;platform:string};sources:Array<{kind:'url'|'text';url?:string;originalText?:string}>}};}).then(({article:saved})=>{
-      setArticleId(saved.id);setSubject(saved.subject);setArticle({headline:saved.headline,lead:saved.lead,body:saved.body});setMediaBias(saved.settings.mediaBias);if(saved.settings.mediaBiasId)setMediaBiasId(saved.settings.mediaBiasId);setValues([saved.settings.biasIntensity,saved.settings.criticalIntensity,saved.settings.excitement,saved.settings.humorIntensity??0]);setOutputLength(saved.settings.outputLength);setAudience(saved.settings.audience);setPlatform(saved.settings.platform);
+    fetch(`${API_BASE}/api/articles/${encodeURIComponent(id)}`).then(async(response)=>{if(!response.ok)throw new Error('خبر پیدا نشد.');return await response.json() as {article:{id:string;subject:string;headline:string;lead:string;body:string;generationUsage?:GenerationUsage;settings:{mediaBias:string;mediaBiasId?:string;biasIntensity:number;criticalIntensity:number;excitement:number;humorIntensity?:number;outputLength:string;audience:string;platform:string};sources:Array<{kind:'url'|'text';url?:string;originalText?:string}>}};}).then(({article:saved})=>{
+      setArticleId(saved.id);setSubject(saved.subject);setArticle({headline:saved.headline,lead:saved.lead,body:saved.body,generationUsage:saved.generationUsage});setMediaBias(saved.settings.mediaBias);if(saved.settings.mediaBiasId)setMediaBiasId(saved.settings.mediaBiasId);setValues([saved.settings.biasIntensity,saved.settings.criticalIntensity,saved.settings.excitement,saved.settings.humorIntensity??0]);setOutputLength(saved.settings.outputLength);setAudience(saved.settings.audience);setPlatform(saved.settings.platform);
       const urls=saved.sources.filter((source)=>source.kind==='url'&&source.url).map((source)=>source.url!);const text=saved.sources.find((source)=>source.kind==='text')?.originalText;if(urls.length){setActiveSource('link');setLinks(urls);}else if(text){setActiveSource('text');setSourceText(text);}
     }).catch((error)=>setNotice(error.message));
   },[]);
@@ -72,7 +74,7 @@ export function Workspace() {
     if(!subject.trim()){setNotice('ابتدا موضوع خبر را وارد کنید.');return;}
     if(enteredSources.length===0){setNotice('حداقل یک لینک یا متن منبع وارد کنید.');return;}
     setNotice('');setLoading(true);
-    try{const response=await fetch(`${API_BASE}/api/generate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({articleId,subject,sources:enteredSources,...settings})});const data=await response.json() as {message?:string;article:{id:string;headline:string;lead:string;body:string}};if(!response.ok)throw new Error(data.message||'تولید خبر ناموفق بود.');setArticle({headline:data.article.headline,lead:data.article.lead,body:data.article.body});setArticleId(data.article.id);setNotice('خبر تولید و در آرشیو ذخیره شد.');}catch(error){setNotice(error instanceof Error?error.message:'خطایی رخ داد.');}finally{setLoading(false);}
+    try{const response=await fetch(`${API_BASE}/api/generate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({articleId,subject,sources:enteredSources,...settings})});const data=await response.json() as {message?:string;article:{id:string;headline:string;lead:string;body:string;generationUsage?:GenerationUsage}};if(!response.ok)throw new Error(data.message||'تولید خبر ناموفق بود.');setArticle({headline:data.article.headline,lead:data.article.lead,body:data.article.body,generationUsage:data.article.generationUsage});setArticleId(data.article.id);setNotice('خبر تولید و در آرشیو ذخیره شد.');}catch(error){setNotice(error instanceof Error?error.message:'خطایی رخ داد.');}finally{setLoading(false);}
   }
   async function saveArticle(){
     if(!article)throw new Error('هنوز خبری برای ذخیره وجود ندارد.');const response=await fetch(`${API_BASE}/api/articles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:articleId,subject,...article,...settings})});const data=await response.json() as {id?:string;message?:string};if(!response.ok)throw new Error(data.message||'ذخیره خبر ناموفق بود.');if(data.id)setArticleId(data.id);setNotice('پیش‌نویس در آرشیو ذخیره شد.');
@@ -95,11 +97,28 @@ export function Workspace() {
           <button type="button" className="generate-button" disabled={loading} onClick={generateArticle}><span className="generate-main"><Sparkles/><strong>{loading?'در حال تولید…':article?'تولید نسخه جدید':'تولید خبر'}</strong></span></button>{notice&&<output className="form-notice">{notice}</output>}
         </section>
         <section className={`result-panel ${article?'':'is-empty'}`}><div className="result-toolbar"><div><span className="status-dot"/> {article?'پیش‌نویس تولیدشده':'بدون خروجی'}</div>{article&&<div><button aria-label="تولید دوباره" onClick={generateArticle}><RotateCcw/></button><button aria-label="کپی" onClick={()=>navigator.clipboard.writeText(`${article.headline}\n\n${article.lead}\n\n${article.body}`).then(()=>setNotice('خبر کپی شد.'))}><Copy/></button><span className="divider"/><button className="more-button">•••</button></div>}</div>
-          {article?<><article className="article-preview"><textarea className="article-title" aria-label="تیتر خبر" value={article.headline} onChange={(event)=>setArticle((current)=>({...current!,headline:event.target.value}))}/><textarea className="lead" aria-label="لید خبر" value={article.lead} onChange={(event)=>setArticle((current)=>({...current!,lead:event.target.value}))}/><div className="article-divider"><span>سردبیر</span></div><textarea className="article-body" aria-label="متن خبر" value={article.body} onChange={(event)=>setArticle((current)=>({...current!,body:event.target.value}))}/></article><footer className="result-footer"><span>{article.body.trim().split(/\s+/).filter(Boolean).length} کلمه</span><span>قابل ویرایش و ذخیره</span></footer></>:<div className="empty-result"><Newspaper/><h2>خروجی خبر اینجا نمایش داده می‌شود</h2><p>موضوع و منبع را وارد کنید، زاویه تحریریه را تنظیم کنید و «تولید خبر» را بزنید.</p></div>}
+          {article?<><article className="article-preview"><textarea className="article-title" aria-label="تیتر خبر" value={article.headline} onChange={(event)=>setArticle((current)=>({...current!,headline:event.target.value}))}/><textarea className="lead" aria-label="لید خبر" value={article.lead} onChange={(event)=>setArticle((current)=>({...current!,lead:event.target.value}))}/><div className="article-divider"><span>سردبیر</span></div><textarea className="article-body" aria-label="متن خبر" value={article.body} onChange={(event)=>setArticle((current)=>({...current!,body:event.target.value}))}/></article>{article.generationUsage?<UsageSummary usage={article.generationUsage}/>:<section className="usage-summary usage-summary-empty">آمار مصرف برای نسخه‌های تولیدشده پیش از فعال‌شدن این قابلیت ثبت نشده است.</section>}<footer className="result-footer"><span>{article.body.trim().split(/\s+/).filter(Boolean).length} کلمه</span><span>قابل ویرایش و ذخیره</span></footer></>:<div className="empty-result"><Newspaper/><h2>خروجی خبر اینجا نمایش داده می‌شود</h2><p>موضوع و منبع را وارد کنید، زاویه تحریریه را تنظیم کنید و «تولید خبر» را بزنید.</p></div>}
         </section>
       </div>
     </section>
   </main>;
 }
+
+function UsageSummary({usage}:{usage:GenerationUsage}){
+  const quota=usage.fiveHourEstimatePercent;
+  return <section className="usage-summary" aria-label="مصرف تولید خبر">
+    <div className="usage-summary-head"><strong>مصرف این نسخه</strong><span>{usage.model}</span></div>
+    <div className="usage-stats">
+      <div><span>کل توکن</span><b>{faNumber(usage.totalTokens)}</b><small>{faNumber(usage.inputTokens)} ورودی · {faNumber(usage.outputTokens)} خروجی</small></div>
+      <div><span>ورودی کش‌شده</span><b>{faNumber(usage.cachedInputTokens)}</b><small>در محاسبه هزینه ارزان‌تر است</small></div>
+      <div><span>هزینه معادل API</span><b dir="ltr">{usage.estimatedApiCostUsd===null?'نامشخص':formatUsd(usage.estimatedApiCostUsd)}</b><small>هزینه واقعی پلن اشتراکی نیست</small></div>
+      <div><span>برآورد سهمیه ۵ساعته</span><b>{quota?`${faDecimal(quota.min)}٪ تا ${faDecimal(quota.max)}٪`:'نامشخص'}</b><small>تخمینی؛ مصرف واقعی متغیر است</small></div>
+    </div>
+  </section>;
+}
+
+function faNumber(value:number){return new Intl.NumberFormat('fa-IR').format(value);}
+function faDecimal(value:number){return new Intl.NumberFormat('fa-IR',{maximumFractionDigits:value<1?2:1}).format(value);}
+function formatUsd(value:number){return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:3,maximumFractionDigits:4}).format(value);}
 
 function toneFor(index:number,value:number){const scales=index===0?['تقریباً خنثی','ملایم','روشن','صریح','حداکثری']:index===1?['آرام و توصیفی','پرسشگر','صریح و چالشی','تند و مطالبه‌گر','بسیار تند']:index===2?['خشک و رسمی','روان','جذاب و رسانه‌ای','پرکشش','بسیار پرقدرت']:['کاملاً جدی','طنز بسیار ظریف','طنز ملایم','طنز آشکار','کاملاً طنز'];return scales[Math.min(4,Math.floor(value/21))];}
